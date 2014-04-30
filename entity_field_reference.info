@@ -1,0 +1,5 @@
+name = Entity field reference
+description = Entityreference field can reference other entities by any fields.
+core = 7.x
+package = Fields
+dependencies[] = entityreference
