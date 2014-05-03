@@ -1,5 +1,30 @@
 <?php
 
+/**
+ * Implements hook_menu().
+ */
+function entity_field_reference_menu() {
+  $items = array();
+  $items['entity_field_reference/autocomplete/single/%/%/%/%'] = array(
+    'title' => 'Entity Field Reference Autocomplete',
+    'page callback' => 'entity_field_reference_autocomplete_callback',
+    'page arguments' => array(2, 3, 4, 5, 6),
+    'access callback' => 'entity_field_reference_autocomplete_access_callback',
+    'access arguments' => array(2, 3, 4, 5, 6),
+    'type' => MENU_CALLBACK,
+  );
+  $items['entity_field_reference/autocomplete/tags/%/%/%/%'] = array(
+    'title' => 'Entity Field Reference Autocomplete',
+    'page callback' => 'entity_field_reference_autocomplete_callback',
+    'page arguments' => array(2, 3, 4, 5, 6),
+    'access callback' => 'entity_field_reference_autocomplete_access_callback',
+    'access arguments' => array(2, 3, 4, 5, 6),
+    'type' => MENU_CALLBACK,
+  );
+
+  return $items;
+}
+
 
 /**
  * Implements hook_field_formatter_info().
@@ -28,6 +53,16 @@ function entity_field_reference_field_formatter_settings_form($field, $instance,
     $entity_type = !empty($field['settings']['target_type']) ? $field['settings']['target_type'] : NULL;
     $entity_bundles = !empty($field['settings']['handler_settings']['target_bundles']) ? $field['settings']['handler_settings']['target_bundles'] : $entity_type;
     $fields = array();
+    $allowed_field_types = array(
+      'text',
+      'number_integer',
+      'number_float',
+      'number_decimal',
+      'list_integer',
+      'list_float',
+      'list_text',
+    );
+
     if (!empty($entity_bundles)) {
       if (is_array($entity_bundles)) {
         foreach ($entity_bundles as $entity_bundle) {
@@ -43,7 +78,8 @@ function entity_field_reference_field_formatter_settings_form($field, $instance,
     $options = array();
     if (!empty($fields)) {
       foreach ($fields as $field_key => $field_value) {
-        if ($field_key != $field['field_name']) {
+        $field_info = field_info_field($field_key);
+        if ($field_key != $field['field_name'] && in_array($field_info['type'], $allowed_field_types)) {
           $options[$field_key] = $field_value['label'];
         }
       }
@@ -89,12 +125,316 @@ function entity_field_reference_field_formatter_view($entity_type, $entity, $fie
         $target_entities = entity_load($target_type, $ids);
         foreach ($target_entities as $target_entity) {
           if(!empty($target_entity->{$settings['field']})) {
-            $output =  render(field_view_field($target_type, $target_entity, $settings['field'], array(), $langcode));
-            $result[$delta] = array('#markup' => $output);
+            $output = field_get_items($target_type, $target_entity, $settings['field'], $langcode);
+            $output = $output[0]['value'];
+            $result[] = array('#markup' => $output);
           }
         }
       }
       break;
   }
   return $result;
+}
+
+/**
+ * Implements hook_field_info_alter().
+ */
+function entity_field_reference_field_info_alter(&$info) {
+  foreach ($info as $field_type => $field_type_info) {
+    $info[$field_type]['settings'] += array(
+      'entity_field_reference' => FALSE,
+    );
+  }
+}
+
+function entity_field_reference_form_field_ui_field_edit_form_alter(&$form, &$form_state, $form_id) {
+  if ($form['#field']['type'] == 'entityreference') {
+    $target_type = $form['#field']['settings']['target_type'];
+    $target_bundles = !empty($form['#field']['settings']['handler_settings']['target_bundles']) ? $form['#field']['settings']['handler_settings']['target_bundles'] : array();
+    $entity_info = entity_get_info($target_type);
+
+    $fields = array();
+    $options = array(0 => t('Default (title)'));
+    if (!empty($target_bundles)) {
+      foreach ($target_bundles as $target_bundle) {
+        $fields[$target_bundle] = field_info_instances($target_type, $target_bundle);
+      }
+    }
+    else {
+      $fields = field_info_instances($target_type);
+    }
+
+    $allowed_field_types = array(
+      'text',
+      'number_integer',
+      'number_float',
+      'number_decimal',
+      'list_integer',
+      'list_float',
+      'list_text',
+    );
+
+    if (!empty($fields)) {
+      foreach ($fields as $bundle => $fs) {
+        if (isset($entity_info['bundles'][$bundle])) {
+          $bundle = $entity_info['bundles'][$bundle];
+        }
+        foreach ($fs as $field_key => $field) {
+          $field_info = field_info_field($field_key);
+          if ($field_key != $form['#field']['field_name'] && in_array($field_info['type'], $allowed_field_types)) {
+            $options[$bundle['label']][$field_key] = $field['label'];
+          }
+        }
+      }
+    }
+
+    $form['field']['settings']['entity_field_reference_wrapper'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Reference field'),
+      '#collapsible' => FALSE,
+      '#collapsed' => FALSE,
+      '#weight' => 10,
+    );
+    $form['field']['settings']['entity_field_reference_wrapper']['entity_field_reference'] = array(
+      '#title' => t('Reference field'),
+      '#type' => 'select',
+      '#options' => $options,
+      '#default_value' => !empty($form['#field']['settings']['entity_field_reference_wrapper']['entity_field_reference']) ? $form['#field']['settings']['entity_field_reference_wrapper']['entity_field_reference'] : 0,
+    );
+
+    $form['instance']['settings']['entity_field_reference_wrapper'] = array(
+      '#type' => 'fieldset',
+      '#title' => t('Reference field'),
+      '#collapsible' => FALSE,
+      '#collapsed' => FALSE,
+      '#weight' => 10,
+    );
+    $form['instance']['settings']['entity_field_reference_wrapper']['entity_field_reference'] = array(
+      '#title' => t('Reference field'),
+      '#type' => 'select',
+      '#options' => $options,
+      '#default_value' => !empty($form['#instance']['settings']['entity_field_reference_wrapper']['entity_field_reference']) ? $form['#instance']['settings']['entity_field_reference_wrapper']['entity_field_reference'] : '_none',
+    );
+  }
+}
+
+
+
+function entity_field_reference_field_widget_form_alter(&$element, &$form_state, $context) {
+  if ($context['field']['type'] == 'entityreference') {
+
+    $instance = $context['instance'];
+    $field = $context['field'];
+
+    $instance_value = !empty($context['instance']['settings']['entity_field_reference_wrapper']['entity_field_reference']) ? $context['instance']['settings']['entity_field_reference_wrapper']['entity_field_reference'] : NULL;
+    $field_value =  !empty($context['field']['settings']['entity_field_reference_wrapper']['entity_field_reference']) ? $context['field']['settings']['entity_field_reference_wrapper']['entity_field_reference'] : NULL;
+    $f = $instance_value ? $instance_value : $field_value;
+    if ($f) {
+      if ($instance['widget']['type'] == 'entityreference_autocomplete' || $instance['widget']['type'] == 'entityreference_autocomplete_tags') {
+        $entity_type = $instance['entity_type'];
+        if (isset($element['target_id'])) {
+          $entity = isset($element['target_id']['#entity']) ? $element['target_id']['#entity'] : NULL;
+        }
+        else {
+          $entity = isset($element['#entity']) ? $element['#entity'] : NULL;
+        }
+        $items = $context['items'];
+        $delta = isset($element['target_id']) ? $element['target_id']['#delta'] : $element['#delta'];
+
+        if ($instance['widget']['type'] == 'entityreference_autocomplete') {
+          // We let the Field API handles multiple values for us, only take
+          // care of the one matching our delta.
+          if (isset($items[$delta])) {
+            $items = array($items[$delta]);
+          }
+          else {
+            $items = array();
+          }
+        }
+
+        $entity_ids = array();
+        $entity_labels = array();
+
+        // Build an array of entities ID.
+        foreach ($items as $item) {
+          $entity_ids[] = $item['target_id'];
+        }
+
+        // Load those entities and loop through them to extract their labels.
+        $entities = entity_load($field['settings']['target_type'], $entity_ids);
+
+        foreach ($entities as $entity_id => $entity_item) {
+          $label = isset($entity_item->{$f}[$entity_item->language][0]['value']) ? $entity_item->{$f}[$entity_item->language][0]['value'] : FALSE;
+          $key = "$label ($entity_id)";
+          // Labels containing commas or quotes must be wrapped in quotes.
+          if (strpos($key, ',') !== FALSE || strpos($key, '"') !== FALSE) {
+            $key = '"' . str_replace('"', '""', $key) . '"';
+          }
+          $entity_labels[] = $key;
+        }
+
+        // Prepare the autocomplete path.
+        if (!empty($instance['widget']['settings']['path'])) {
+          $autocomplete_path = $instance['widget']['settings']['path'];
+        }
+        else {
+          $autocomplete_path = $instance['widget']['type'] == 'entityreference_autocomplete' ? 'entity_field_reference/autocomplete/single' : 'entity_field_reference/autocomplete/tags';
+        }
+
+        $autocomplete_path .= '/' . $field['field_name'] . '/' . $instance['entity_type'] . '/' . $instance['bundle'] . '/' . $f . '/';
+        // Use <NULL> as a placeholder in the URL when we don't have an entity.
+        // Most webservers collapse two consecutive slashes.
+        $id = 'NULL';
+        if ($entity) {
+          list($eid) = entity_extract_ids($entity_type, $entity);
+          if ($eid) {
+            $id = $eid;
+          }
+        }
+        $autocomplete_path .= $id;
+        if(isset($element['target_id'])) {
+          $element['target_id']['#autocomplete_path'] = $autocomplete_path;
+        }
+        else {
+          $element['#autocomplete_path'] = $autocomplete_path;
+        }
+
+        if(isset($element['target_id'])) {
+          $element['target_id']['#default_value'] = implode(', ', $entity_labels);
+        }
+        else {
+          $element['#default_value'] = implode(', ', $entity_labels);
+        }
+      }
+      else {
+        $target_type = $context['field']['settings']['target_type'];
+        $bundles = $context['field']['settings']['handler_settings']['target_bundles'];
+        $options = _entity_field_reference_get_options($f, $target_type, $bundles);
+        $element['#options'] = $options;
+      }
+    }
+  }
+}
+
+
+function _entity_field_reference_get_options($field_name, $target_type, $target_bundles = array()) {
+  $options = array();
+  $query = db_select('field_data_' . $field_name, 'f')
+    ->fields('f', array('entity_id', 'bundle',  $field_name . '_value'));
+  $count = count($target_bundles);
+  $entity_info = entity_get_info($target_type);
+
+  if ($count > 1) {
+    $query = $query->condition('bundle', $target_bundles, 'IN');
+    $result = $query->execute();
+    foreach ($result as $row) {
+      $bundle_info = !empty($entity_info['bundles'][$row->bundle]) ? $entity_info['bundles'][$row->bundle] : NULL;
+      $options[$bundle_info['label']][$row->entity_id] = $row->{$field_name . '_value'};
+    }
+  }
+  elseif ($count == 0) {
+    $result = $query->execute();
+    foreach ($result as $row) {
+      $bundle_info = !empty($entity_info['bundles'][$row->bundle]) ? $entity_info['bundles'][$row->bundle] : NULL;
+      $options[$bundle_info['label']][$row->entity_id] = $row->{$field_name . '_value'};
+    }
+  }
+  else {
+    $query = $query->condition('bundle', $target_bundles, 'IN');
+    $result = $query->execute();
+    foreach ($result as $row) {
+      $options[$row->entity_id] = $row->{$field_name . '_value'};
+    }
+  }
+  return $options;
+}
+
+function entity_field_reference_autocomplete_callback($type, $field_name, $entity_type, $bundle_name, $field_reference, $entity_id = '', $string = '') {
+// If the request has a '/' in the search text, then the menu system will have
+  // split it into multiple arguments and $string will only be a partial. We want
+  //  to make sure we recover the intended $string.
+  $args = func_get_args();
+
+  // Shift off the $type, $field_name, $entity_type, $bundle_name, and $entity_id args.
+  array_shift($args);
+  array_shift($args);
+  array_shift($args);
+  array_shift($args);
+  array_shift($args);
+  array_shift($args);
+  $string = implode('/', $args);
+
+  $field = field_info_field($field_name);
+  $instance = field_info_instance($entity_type, $field_name, $bundle_name);
+
+  return entity_field_reference_autocomplete_callback_get_matches($type, $field, $instance, $entity_type, $field_reference, $entity_id, $string);
+}
+
+function entity_field_reference_autocomplete_access_callback($type, $field_name, $entity_type, $bundle_name) {
+  $field = field_info_field($field_name);
+  $instance = field_info_instance($entity_type, $field_name, $bundle_name);
+
+  if (!$field || !$instance || $field['type'] != 'entityreference' || !field_access('edit', $field, $entity_type)) {
+    return FALSE;
+  }
+  return TRUE;
+}
+
+function entity_field_reference_autocomplete_callback_get_matches($type, $field, $instance, $entity_type, $field_reference, $entity_id = '', $string = '') {
+  $matches = array();
+  $entity = NULL;
+  if ($entity_id !== 'NULL') {
+    $entity = entity_load_single($entity_type, $entity_id);
+    $has_view_access = (entity_access('view', $entity_type, $entity) !== FALSE);
+    $has_update_access = (entity_access('update', $entity_type, $entity) !== FALSE);
+    if (!$entity || !($has_view_access || $has_update_access)) {
+      return MENU_ACCESS_DENIED;
+    }
+  }
+  if ($type == 'tags') {
+    // The user enters a comma-separated list of tags. We only autocomplete the last tag.
+    $tags_typed = drupal_explode_tags($string);
+    $tag_last = drupal_strtolower(array_pop($tags_typed));
+    if (!empty($tag_last)) {
+      $prefix = count($tags_typed) ? implode(', ', $tags_typed) . ', ' : '';
+    }
+  }
+  else {
+    // The user enters a single tag.
+    $prefix = '';
+    $tag_last = $string;
+  }
+
+  if (isset($tag_last)) {
+    // Get an array of matching entities.
+    $query = db_select('field_data_' . $field_reference, 'f')
+      ->fields('f', array('entity_id', 'bundle',  $field_reference . '_value'))
+      ->condition($field_reference . '_value', '%' . $tag_last .'%', 'LIKE');
+    if (!empty($field['settings']['handler_settings']['target_bundles'])) {
+      $query = $query->condition('bundle', $field['settings']['handler_settings']['target_bundles'], 'IN');
+    }
+    $entity_labels = array();
+    $result = $query->execute();
+    if ($result) {
+      foreach ($result as $row) {
+        $entity_labels[$row->bundle][$row->entity_id] = $row->{$field_reference . '_value'};
+      }
+    }
+
+    // Loop through the products and convert them into autocomplete output.
+    foreach ($entity_labels as $values) {
+      foreach ($values as $entity_id => $label) {
+        $key = "$label ($entity_id)";
+        // Strip things like starting/trailing white spaces, line breaks and tags.
+        $key = preg_replace('/\s\s+/', ' ', str_replace("\n", '', trim(decode_entities(strip_tags($key)))));
+        // Names containing commas or quotes must be wrapped in quotes.
+        if (strpos($key, ',') !== FALSE || strpos($key, '"') !== FALSE) {
+          $key = '"' . str_replace('"', '""', $key) . '"';
+        }
+        $matches[$prefix . $key] = '<div class="reference-autocomplete">' . $label . '</div>';
+      }
+    }
+  }
+
+  drupal_json_output($matches);
 }
