@@ -197,6 +197,7 @@ function entity_field_reference_form_field_ui_field_edit_form_alter(&$form, &$fo
     );
     $form['field']['settings']['entity_field_reference_wrapper']['entity_field_reference'] = array(
       '#title' => t('Reference field'),
+      '#description' => t('Please note: Appropriate target bundle should be enabled.'),
       '#type' => 'select',
       '#options' => $options,
       '#default_value' => !empty($form['#field']['settings']['entity_field_reference_wrapper']['entity_field_reference']) ? $form['#field']['settings']['entity_field_reference_wrapper']['entity_field_reference'] : 0,
