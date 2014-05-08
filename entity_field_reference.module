@@ -62,7 +62,6 @@ function entity_field_reference_field_formatter_settings_form($field, $instance,
       'list_float',
       'list_text',
     );
-
     if (!empty($entity_bundles)) {
       if (is_array($entity_bundles)) {
         foreach ($entity_bundles as $entity_bundle) {
@@ -71,7 +70,10 @@ function entity_field_reference_field_formatter_settings_form($field, $instance,
         }
       }
       else {
-        $fields = field_info_instances($entity_type, $entity_bundles);
+        $fields = field_info_instances($entity_type);
+        foreach ($fields as $bundle => $value) {
+          $fields = $fields + $value;
+        }
       }
     }
 
@@ -84,6 +86,7 @@ function entity_field_reference_field_formatter_settings_form($field, $instance,
         }
       }
     }
+
     $element['field'] = array(
       '#title' => t('Link label to the referenced entity'),
       '#type' => 'select',
@@ -188,6 +191,9 @@ function entity_field_reference_form_field_ui_field_edit_form_alter(&$form, &$fo
       }
     }
 
+    $default_value_field = !empty($form['#field']['settings']['entity_field_reference_wrapper']['entity_field_reference']) ? $form['#field']['settings']['entity_field_reference_wrapper']['entity_field_reference'] : 0;
+    $default_value_instance = !empty($form['#instance']['settings']['entity_field_reference_wrapper']['entity_field_reference']) ? $form['#instance']['settings']['entity_field_reference_wrapper']['entity_field_reference'] : 0;
+
     $form['field']['settings']['entity_field_reference_wrapper'] = array(
       '#type' => 'fieldset',
       '#title' => t('Reference field'),
@@ -200,7 +206,8 @@ function entity_field_reference_form_field_ui_field_edit_form_alter(&$form, &$fo
       '#description' => t('Please note: Appropriate target bundle should be enabled.'),
       '#type' => 'select',
       '#options' => $options,
-      '#default_value' => !empty($form['#field']['settings']['entity_field_reference_wrapper']['entity_field_reference']) ? $form['#field']['settings']['entity_field_reference_wrapper']['entity_field_reference'] : 0,
+      '#multiple' => TRUE,
+      '#default_value' => $default_value_field,
     );
 
     $form['instance']['settings']['entity_field_reference_wrapper'] = array(
@@ -214,7 +221,8 @@ function entity_field_reference_form_field_ui_field_edit_form_alter(&$form, &$fo
       '#title' => t('Reference field'),
       '#type' => 'select',
       '#options' => $options,
-      '#default_value' => !empty($form['#instance']['settings']['entity_field_reference_wrapper']['entity_field_reference']) ? $form['#instance']['settings']['entity_field_reference_wrapper']['entity_field_reference'] : '_none',
+      '#multiple' => TRUE,
+      '#default_value' => $default_value_instance,
     );
   }
 }
@@ -265,13 +273,15 @@ function entity_field_reference_field_widget_form_alter(&$element, &$form_state,
         $entities = entity_load($field['settings']['target_type'], $entity_ids);
 
         foreach ($entities as $entity_id => $entity_item) {
-          $label = isset($entity_item->{$f}[$entity_item->language][0]['value']) ? $entity_item->{$f}[$entity_item->language][0]['value'] : FALSE;
-          $key = "$label ($entity_id)";
-          // Labels containing commas or quotes must be wrapped in quotes.
-          if (strpos($key, ',') !== FALSE || strpos($key, '"') !== FALSE) {
-            $key = '"' . str_replace('"', '""', $key) . '"';
+          foreach ($f as $field_name) {
+            $label = isset($entity_item->{$field_name}[$entity_item->language][0]['value']) ? $entity_item->{$field_name}[$entity_item->language][0]['value'] : FALSE;
+            $key = "$label ($entity_id)";
+            // Labels containing commas or quotes must be wrapped in quotes.
+            if (strpos($key, ',') !== FALSE || strpos($key, '"') !== FALSE) {
+              $key = '"' . str_replace('"', '""', $key) . '"';
+            }
+            $entity_labels[] = $key;
           }
-          $entity_labels[] = $key;
         }
 
         // Prepare the autocomplete path.
@@ -282,7 +292,7 @@ function entity_field_reference_field_widget_form_alter(&$element, &$form_state,
           $autocomplete_path = $instance['widget']['type'] == 'entityreference_autocomplete' ? 'entity_field_reference/autocomplete/single' : 'entity_field_reference/autocomplete/tags';
         }
 
-        $autocomplete_path .= '/' . $field['field_name'] . '/' . $instance['entity_type'] . '/' . $instance['bundle'] . '/' . $f . '/';
+        $autocomplete_path .= '/' . $field['field_name'] . '/' . $instance['entity_type'] . '/' . $instance['bundle'] . '/' . implode(',', $f) . '/';
         // Use <NULL> as a placeholder in the URL when we don't have an entity.
         // Most webservers collapse two consecutive slashes.
         $id = 'NULL';
@@ -311,42 +321,96 @@ function entity_field_reference_field_widget_form_alter(&$element, &$form_state,
         $target_type = $context['field']['settings']['target_type'];
         $bundles = $context['field']['settings']['handler_settings']['target_bundles'];
         $options = _entity_field_reference_get_options($f, $target_type, $bundles);
+        $default_values = array();
+        if (!empty($element['#default_value'])) {
+          foreach ($element['#default_value'] as $df) {
+            foreach ($f as $fn) {
+              $default_values[] = $fn . ':' . $df;
+            }
+          }
+        }
+        $element['#default_value'] = $default_values;
         $element['#options'] = $options;
+        $element['#element_validate'][] = '_entity_field_reference_options_validate';
       }
     }
   }
 }
 
+function _entity_field_reference_options_validate($element, &$form_state, $form) {
+  $lng = $form_state['values']['language'];
+  if (!empty($form_state['values'][$element['#field_name']][$lng])) {
+    $ids = $form_state['values'][$element['#field_name']][$lng];
+    foreach ($ids as $i => $value) {
+      $entity_id = $value['target_id'];
+      $entity_id = explode(':', $entity_id);
+      $target_id = array_pop($entity_id);
+      $form_state['values'][$element['#field_name']][$lng][$i] = array('target_id' => $target_id);
+    }
+  }
+}
 
-function _entity_field_reference_get_options($field_name, $target_type, $target_bundles = array()) {
+
+function _entity_field_reference_get_options($field_names, $target_type, $target_bundles = array()) {
   $options = array();
-  $query = db_select('field_data_' . $field_name, 'f')
-    ->fields('f', array('entity_id', 'bundle',  $field_name . '_value'));
+  $first = array_shift($field_names);
+  $query = db_select('field_data_' . $first, $first);
+  $query = $query->fields($first, array('entity_id', 'bundle',  $first . '_value'));
+
+  if (!empty($field_names)) {
+    foreach ($field_names as $field_name) {
+      $query->leftJoin('field_data_'. $field_name, $field_name, $first . '.entity_id = ' . $field_name . '.entity_id');
+      $query = $query->fields($field_name, array('entity_id', 'bundle',  $field_name . '_value'));
+    }
+  }
+
   $count = count($target_bundles);
   $entity_info = entity_get_info($target_type);
 
   if ($count > 1) {
-    $query = $query->condition('bundle', $target_bundles, 'IN');
+    $query = $query->condition($first . '.bundle', $target_bundles, 'IN');
     $result = $query->execute();
     foreach ($result as $row) {
       $bundle_info = !empty($entity_info['bundles'][$row->bundle]) ? $entity_info['bundles'][$row->bundle] : NULL;
-      $options[$bundle_info['label']][$row->entity_id] = $row->{$field_name . '_value'};
+      $options[$bundle_info['label']][$first . ':' . $row->entity_id] = $row->{$first . '_value'};
+      if (!empty($field_names)) {
+        foreach ($field_names as $field_name) {
+          if (!empty($row->{$field_name . '_entity_id'})) {
+            $options[$bundle_info['label']][$field_name . ':' . $row->entity_id] = $row->{$field_name . '_value'};
+          }
+        }
+      }
     }
   }
   elseif ($count == 0) {
     $result = $query->execute();
     foreach ($result as $row) {
       $bundle_info = !empty($entity_info['bundles'][$row->bundle]) ? $entity_info['bundles'][$row->bundle] : NULL;
-      $options[$bundle_info['label']][$row->entity_id] = $row->{$field_name . '_value'};
+      $options[$bundle_info['label']][$first . ':' . $row->entity_id] = $row->{$first . '_value'};
+      if (!empty($field_names)) {
+        foreach ($field_names as $field_name) {
+          if (!empty($row->{$field_name . '_entity_id'})) {
+            $options[$bundle_info['label']][$field_name . ':' . $row->entity_id] = $row->{$field_name . '_value'};
+          }
+        }
+      }
     }
   }
   else {
-    $query = $query->condition('bundle', $target_bundles, 'IN');
+    $query = $query->condition($first . '.bundle', $target_bundles, 'IN');
     $result = $query->execute();
     foreach ($result as $row) {
-      $options[$row->entity_id] = $row->{$field_name . '_value'};
+      $options[$first . ':' . $row->entity_id] = $row->{$first . '_value'};
+        if (!empty($field_names)) {
+        foreach ($field_names as $field_name) {
+          if (!empty($row->{$field_name . '_entity_id'})) {
+            $options[$field_name . ':' . $row->entity_id] = $row->{$field_name . '_value'};
+          }
+        }
+      }
     }
   }
+
   return $options;
 }
 
@@ -367,6 +431,8 @@ function entity_field_reference_autocomplete_callback($type, $field_name, $entit
 
   $field = field_info_field($field_name);
   $instance = field_info_instance($entity_type, $field_name, $bundle_name);
+
+  $field_reference = explode(',', $field_reference);
 
   return entity_field_reference_autocomplete_callback_get_matches($type, $field, $instance, $entity_type, $field_reference, $entity_id, $string);
 }
@@ -408,17 +474,19 @@ function entity_field_reference_autocomplete_callback_get_matches($type, $field,
 
   if (isset($tag_last)) {
     // Get an array of matching entities.
-    $query = db_select('field_data_' . $field_reference, 'f')
-      ->fields('f', array('entity_id', 'bundle',  $field_reference . '_value'))
-      ->condition($field_reference . '_value', '%' . $tag_last .'%', 'LIKE');
-    if (!empty($field['settings']['handler_settings']['target_bundles'])) {
-      $query = $query->condition('bundle', $field['settings']['handler_settings']['target_bundles'], 'IN');
-    }
     $entity_labels = array();
-    $result = $query->execute();
-    if ($result) {
-      foreach ($result as $row) {
-        $entity_labels[$row->bundle][$row->entity_id] = $row->{$field_reference . '_value'};
+    foreach ($field_reference as $field_name) {
+      $query = db_select('field_data_' . $field_name, $field_name)
+        ->fields($field_name, array('entity_id', 'bundle',  $field_name . '_value'))
+        ->condition($field_name . '_value', '%' . $tag_last .'%', 'LIKE');
+      if (!empty($field['settings']['handler_settings']['target_bundles'])) {
+        $query = $query->condition($field_name . '.bundle', $field['settings']['handler_settings']['target_bundles'], 'IN');
+      }
+      $result = $query->execute();
+      if ($result) {
+        foreach ($result as $row) {
+          $entity_labels[$row->bundle][$row->entity_id] = $row->{$field_name . '_value'};
+        }
       }
     }
 
